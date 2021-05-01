@@ -19,6 +19,16 @@ results_file = 'results.txt'
 
 # Hyperparameters (results68: 59.9 mAP@0.5 yolov3-spp-416) https://github.com/ultralytics/yolov3/issues/310
 
+class MyDataParallel(torch.nn.DataParallel):
+    """
+    Allow nn.DataParallel to call model's attributes.
+    """
+    def __getattr__(self, name):
+        try:
+            return super().__getattr__(name)
+        except AttributeError:
+            return getattr(self.module, name)
+
 hyp = {'giou': 3.54,  # giou loss gain
        'cls': 37.4,  # cls loss gain
        'cls_pw': 1.0,  # cls BCELoss positive_weight
@@ -65,8 +75,8 @@ def train():
 
     # Configure run
     data_dict = parse_data_cfg(data)
-    train_path = '../dac_test/data_training'
-    test_path = '../dac_test/test_data'
+    train_path = '../../../DAC_vecq/train'
+    test_path = '../../../dji_test'
     nc = 1 
 
     # Remove previous results
@@ -132,7 +142,7 @@ def train():
             with open(results_file, 'w') as file:
                 file.write(chkpt['training_results'])  # write results.txt
 
-        start_epoch = chkpt['epoch'] + 1
+        # start_epoch = chkpt['epoch'] + 1
         del chkpt
 
     elif len(weights) > 0:  # darknet format
@@ -167,6 +177,10 @@ def train():
                                 rank=0)  # distributed training node rank
         model = torch.nn.parallel.DistributedDataParallel(model, find_unused_parameters=True)
         model.yolo_layers = model.module.yolo_layers  # move yolo layer indices to top level
+
+
+    # model = MyDataParallel(model)
+    # model.yolo_layers = model.module.yolo_layers
 
     # Dataset
     dataset = LoadImagesAndLabels(train_path, img_size, batch_size,
@@ -379,7 +393,7 @@ def train():
 
     if not opt.evolve:
         plot_results()  # save as results.png
-    print('%g epochs completed in %.3f hours.\n' % (epoch - start_epoch + 1, (time.time() - t0) / 3600))
+    print('%g epochs completed in %.3f hours.\n' % (epochs - start_epoch + 1, (time.time() - t0) / 3600))
     dist.destroy_process_group() if torch.cuda.device_count() > 1 else None
     torch.cuda.empty_cache()
 
@@ -388,7 +402,7 @@ def train():
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--epochs', type=int, default=500)  # 500200 batches at bs 16, 117263 COCO images = 273 epochs
+    parser.add_argument('--epochs', type=int, default=200)  # 500200 batches at bs 16, 117263 COCO images = 273 epochs
     parser.add_argument('--batch-size', type=int, default=16)  # effective bs = batch_size * accumulate = 16 * 4 = 64
     parser.add_argument('--accumulate', type=int, default=4, help='batches to accumulate before optimizing')
     parser.add_argument('--cfg', type=str, default='cfg/yolov3-tiny-1cls_1.cfg', help='*.cfg path')
@@ -412,6 +426,9 @@ if __name__ == '__main__':
     opt = parser.parse_args()
     opt.weights = last if opt.resume else opt.weights
     print(opt)
+
+    os.environ['CUDA_VISIBLE_DEVICES'] = '0,1'
+    torch.cuda.manual_seed(42)
     device = torch_utils.select_device(opt.device, batch_size=opt.batch_size)
     # scale hyp['obj'] by img_size (evolved at 320)
     # hyp['obj'] *= opt.img_size[0] / 320.
